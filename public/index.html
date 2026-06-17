@@ -1,0 +1,519 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Mock 数据生成器</title>
+  <link rel="stylesheet" href="https://unpkg.com/element-plus@2.4.4/dist/index.css">
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <div id="app">
+    <el-container class="app-container">
+      <el-header class="app-header">
+        <div class="header-left">
+          <h1 class="app-title">
+            <span class="title-icon">🎲</span>
+            Mock 数据生成器
+          </h1>
+          <span class="app-subtitle">为开发团队提供快速、可定制的假数据生成服务</span>
+        </div>
+        <div class="header-right">
+          <el-tag type="success" size="large">服务运行中</el-tag>
+        </div>
+      </el-header>
+
+      <el-container class="main-container">
+        <el-aside width="320px" class="aside-container">
+          <div class="section-title">
+            <el-icon><DataAnalysis /></el-icon>
+            数据模型
+          </div>
+
+          <el-card class="model-card">
+            <el-form :model="modelForm" label-position="top">
+              <el-form-item label="模型名称">
+                <el-input v-model="modelForm.name" placeholder="如：用户、订单等" />
+              </el-form-item>
+
+              <div class="seed-section">
+                <el-form-item label="随机种子">
+                  <el-input-number v-model="seed" :min="0" :max="999999999" size="default" style="width: 100%;" />
+                </el-form-item>
+                <el-button type="primary" size="small" @click="randomSeed" style="width: 100%;">
+                  <el-icon><Refresh /></el-icon>
+                  随机种子
+                </el-button>
+              </div>
+            </el-form>
+          </el-card>
+
+          <div class="section-title with-actions">
+            <span>
+              <el-icon><Menu /></el-icon>
+              字段列表 ({{ modelForm.fields.length }})
+            </span>
+            <el-button type="primary" size="small" @click="addField">
+              <el-icon><Plus /></el-icon>
+              添加
+            </el-button>
+          </div>
+
+          <div class="template-section">
+            <el-select v-model="selectedTemplate" placeholder="选择模板快速创建" @change="applyTemplate" clearable>
+              <el-option
+                v-for="tpl in templates"
+                :key="tpl.name"
+                :label="`${tpl.icon} ${tpl.label}`"
+                :value="tpl.name"
+              />
+            </el-select>
+          </div>
+
+          <el-scrollbar class="fields-scrollbar">
+            <div class="field-list">
+              <div
+                v-for="(field, index) in modelForm.fields"
+                :key="index"
+                class="field-item"
+                :class="{ active: editingFieldIndex === index }"
+                @click="selectField(index)"
+              >
+                <div class="field-header">
+                  <span class="field-type-badge" :class="`type-${field.type}`">
+                    {{ getTypeIcon(field.type) }} {{ getTypeLabel(field.type) }}
+                  </span>
+                  <span class="field-name">{{ field.name }}</span>
+                  <el-button
+                    type="danger"
+                    size="small"
+                    text
+                    @click.stop="removeField(index)"
+                  >
+                    <el-icon><Delete /></el-icon>
+                  </el-button>
+                </div>
+                <div class="field-label">{{ field.label || field.name }}</div>
+              </div>
+            </div>
+          </el-scrollbar>
+        </el-aside>
+
+        <el-main class="main-content">
+          <el-tabs v-model="activeTab" class="main-tabs">
+            <el-tab-pane label="字段配置" name="config">
+              <div v-if="editingFieldIndex >= 0" class="field-config-panel">
+                <el-card class="config-card">
+                  <template #header>
+                    <div class="card-header">
+                      <span class="card-title">
+                        <el-icon><Setting /></el-icon>
+                        编辑字段：{{ currentField?.name || '未选择' }}
+                      </span>
+                    </div>
+                  </template>
+
+                  <el-form :model="currentField" label-width="120px" label-position="left">
+                    <el-form-item label="字段名">
+                      <el-input v-model="currentField.name" placeholder="如：username" />
+                    </el-form-item>
+
+                    <el-form-item label="显示标签">
+                      <el-input v-model="currentField.label" placeholder="如：用户名" />
+                    </el-form-item>
+
+                    <el-form-item label="字段类型">
+                      <el-select v-model="currentField.type" @change="onTypeChange" style="width: 100%;">
+                        <el-option
+                          v-for="type in fieldTypes"
+                          :key="type.value"
+                          :label="`${type.icon} ${type.label}`"
+                          :value="type.value"
+                        />
+                      </el-select>
+                    </el-form-item>
+
+                    <el-form-item label="允许为空">
+                      <el-switch v-model="currentField.nullable" />
+                    </el-form-item>
+
+                    <el-form-item v-if="currentField.nullable" label="空值概率">
+                      <el-slider v-model="currentField.nullProbability" :min="0" :max="1" :step="0.05" show-input />
+                    </el-form-item>
+
+                    <el-divider>生成规则</el-divider>
+
+                    <template v-if="currentField.type === 'string'">
+                      <el-form-item label="格式">
+                        <el-select v-model="currentField.rule.format" placeholder="选择格式" clearable style="width: 100%;">
+                          <el-option
+                            v-for="fmt in formats"
+                            :key="fmt.value"
+                            :label="fmt.label"
+                            :value="fmt.value"
+                          />
+                        </el-select>
+                      </el-form-item>
+
+                      <el-form-item v-if="currentField.rule.format === 'custom'" label="正则模式">
+                        <el-input v-model="currentField.rule.pattern" placeholder="如：USER-{4}d" />
+                        <div class="pattern-help">
+                          <small>占位符：{n}d=数字, {n}c=小写字母, {n}C=大写字母, {n}w=小写+数字, {n}x=十六进制</small>
+                        </div>
+                      </el-form-item>
+
+                      <el-form-item label="最小长度">
+                        <el-input-number v-model="currentField.rule.minLength" :min="0" :max="1000" style="width: 100%;" />
+                      </el-form-item>
+
+                      <el-form-item label="最大长度">
+                        <el-input-number v-model="currentField.rule.maxLength" :min="1" :max="1000" style="width: 100%;" />
+                      </el-form-item>
+
+                      <el-form-item label="前缀">
+                        <el-input v-model="currentField.rule.prefix" placeholder="如：USER_" />
+                      </el-form-item>
+
+                      <el-form-item label="后缀">
+                        <el-input v-model="currentField.rule.suffix" placeholder="如：_TEST" />
+                      </el-form-item>
+
+                      <el-form-item label="可选值列表">
+                        <el-select
+                          v-model="currentField.rule.options"
+                          multiple
+                          filterable
+                          allow-create
+                          default-first-option
+                          placeholder="输入后按回车添加"
+                          style="width: 100%;"
+                        />
+                      </el-form-item>
+                    </template>
+
+                    <template v-if="currentField.type === 'number'">
+                      <el-form-item label="最小值">
+                        <el-input-number v-model="currentField.rule.min" style="width: 100%;" />
+                      </el-form-item>
+
+                      <el-form-item label="最大值">
+                        <el-input-number v-model="currentField.rule.max" style="width: 100%;" />
+                      </el-form-item>
+
+                      <el-form-item label="小数位数">
+                        <el-input-number v-model="currentField.rule.decimal" :min="0" :max="10" style="width: 100%;" />
+                      </el-form-item>
+                    </template>
+
+                    <template v-if="currentField.type === 'boolean'">
+                      <el-form-item label="true概率">
+                        <el-slider v-model="currentField.rule.probability" :min="0" :max="1" :step="0.05" show-input />
+                      </el-form-item>
+                    </template>
+
+                    <template v-if="currentField.type === 'date'">
+                      <el-form-item label="开始日期">
+                        <el-date-picker
+                          v-model="currentField.rule.min"
+                          type="datetime"
+                          placeholder="选择开始日期"
+                          style="width: 100%;"
+                          value-format="YYYY-MM-DDTHH:mm:ss"
+                        />
+                      </el-form-item>
+
+                      <el-form-item label="结束日期">
+                        <el-date-picker
+                          v-model="currentField.rule.max"
+                          type="datetime"
+                          placeholder="选择结束日期"
+                          style="width: 100%;"
+                          value-format="YYYY-MM-DDTHH:mm:ss"
+                        />
+                      </el-form-item>
+
+                      <el-form-item label="输出格式">
+                        <el-select v-model="currentField.rule.format" style="width: 100%;">
+                          <el-option label="YYYY-MM-DD HH:mm:ss" value="YYYY-MM-DD HH:mm:ss" />
+                          <el-option label="YYYY-MM-DD" value="YYYY-MM-DD" />
+                          <el-option label="YYYY/MM/DD" value="YYYY/MM/DD" />
+                          <el-option label="YYYY年MM月DD日" value="YYYY年MM月DD日" />
+                          <el-option label="MM-DD-YYYY" value="MM-DD-YYYY" />
+                          <el-option label="ISO 8601" value="YYYY-MM-DDTHH:mm:ss" />
+                        </el-select>
+                      </el-form-item>
+                    </template>
+
+                    <template v-if="currentField.type === 'enum'">
+                      <el-form-item label="可选值">
+                        <el-select
+                          v-model="currentField.rule.options"
+                          multiple
+                          filterable
+                          allow-create
+                          default-first-option
+                          placeholder="输入后按回车添加选项"
+                          style="width: 100%;"
+                        />
+                      </el-form-item>
+
+                      <el-form-item v-if="currentField.rule.options.length > 0" label="权重配置">
+                        <div class="weights-config">
+                          <div
+                            v-for="(opt, idx) in currentField.rule.options"
+                            :key="idx"
+                            class="weight-item"
+                          >
+                            <span class="weight-label">{{ opt }}</span>
+                            <el-slider
+                              v-model="currentField.rule.weights[idx]"
+                              :min="0"
+                              :max="1"
+                              :step="0.05"
+                              :placeholder="`${opt} 的权重`"
+                            />
+                            <span class="weight-value">{{ (currentField.rule.weights[idx] || 0).toFixed(2) }}</span>
+                          </div>
+                        </div>
+                      </el-form-item>
+                    </template>
+                  </el-form>
+                </el-card>
+              </div>
+
+              <el-empty v-else description="请从左侧选择或添加字段" />
+            </el-tab-pane>
+
+            <el-tab-pane label="数据预览" name="preview">
+              <div class="preview-panel">
+                <el-card class="preview-card">
+                  <template #header>
+                    <div class="card-header with-actions">
+                      <span class="card-title">
+                        <el-icon><View /></el-icon>
+                        数据预览
+                      </span>
+                      <div class="header-actions">
+                        <el-radio-group v-model="paginationMode" size="default" @change="onPaginationModeChange">
+                          <el-radio-button value="client">
+                            <el-icon><Monitor /></el-icon>
+                            前端分页
+                          </el-radio-button>
+                          <el-radio-button value="server">
+                            <el-icon><Cpu /></el-icon>
+                            后端分页
+                          </el-radio-button>
+                        </el-radio-group>
+                        <el-input-number
+                          v-if="paginationMode === 'client'"
+                          v-model="generateCount"
+                          :min="1"
+                          :max="10000"
+                          size="default"
+                        />
+                        <el-input-number
+                          v-if="paginationMode === 'server'"
+                          v-model="serverTotalCount"
+                          :min="1"
+                          :max="1000000"
+                          size="default"
+                          placeholder="总数据量"
+                        />
+                        <el-input-number
+                          v-if="paginationMode === 'server'"
+                          v-model="pageSize"
+                          :min="10"
+                          :max="500"
+                          size="default"
+                          placeholder="每页条数"
+                        />
+                        <el-button type="primary" @click="generateData" :loading="generating">
+                          <el-icon><Refresh /></el-icon>
+                          {{ paginationMode === 'client' ? '生成数据' : '开始预览' }}
+                        </el-button>
+                        <el-button
+                          type="success"
+                          @click="exportJSON"
+                          :disabled="!hasDataToExport"
+                        >
+                          <el-icon><Download /></el-icon>
+                          导出 JSON
+                        </el-button>
+                        <el-button
+                          type="warning"
+                          @click="exportCSV"
+                          :disabled="!hasDataToExport"
+                        >
+                          <el-icon><Document /></el-icon>
+                          导出 CSV
+                        </el-button>
+                      </div>
+                    </div>
+                  </template>
+
+                  <el-alert
+                    v-if="paginationMode === 'client' && generateCount > 1000"
+                    type="warning"
+                    :closable="false"
+                    show-icon
+                    class="performance-alert"
+                  >
+                    <template #title>
+                      大数据量提示
+                    </template>
+                    <template #default>
+                      当前生成数量超过 1000 条，建议切换到「后端分页」模式以获得更好的性能。后端分页模式按需加载每页数据，不会占用大量浏览器内存。
+                    </template>
+                  </el-alert>
+
+                  <el-alert
+                    v-if="paginationMode === 'server'"
+                    type="info"
+                    :closable="false"
+                    show-icon
+                    class="performance-alert"
+                  >
+                    <template #title>
+                      后端分页模式
+                    </template>
+                    <template #default>
+                      当前使用后端分页模式，每次翻页只请求当前页数据。总数据量：{{ serverTotalCount.toLocaleString() }} 条，支持百万级数据量。
+                    </template>
+                  </el-alert>
+
+                  <div class="preview-stats" v-if="hasDataToDisplay">
+                    <el-row :gutter="20">
+                      <el-col :span="6">
+                        <el-statistic title="当前页数据" :value="currentPageData.length" />
+                      </el-col>
+                      <el-col :span="6">
+                        <el-statistic title="总数据量" :value="displayTotalCount" />
+                      </el-col>
+                      <el-col :span="6">
+                        <el-statistic title="当前页码" :value="currentPage" />
+                      </el-col>
+                      <el-col :span="6">
+                        <el-statistic title="种子值" :value="seed" />
+                      </el-col>
+                    </el-row>
+                    <div class="mode-indicator">
+                      <el-tag :type="paginationMode === 'client' ? 'success' : 'primary'" size="small">
+                        {{ paginationMode === 'client' ? '前端分页模式' : '后端分页模式' }}
+                      </el-tag>
+                      <span v-if="paginationMode === 'client'" class="mode-desc">
+                        已加载全部 {{ generatedData.length.toLocaleString() }} 条数据到本地
+                      </span>
+                      <span v-else class="mode-desc">
+                        按需加载，已加载 {{ currentPageData.length.toLocaleString() }} 条
+                      </span>
+                    </div>
+                  </div>
+
+                  <div class="table-container" v-if="hasDataToDisplay">
+                    <el-table :data="currentPageData" stripe border style="width: 100%;" max-height="500px">
+                      <el-table-column
+                        v-for="field in modelForm.fields"
+                        :key="field.name"
+                        :prop="field.name"
+                        :label="field.label || field.name"
+                        min-width="150"
+                        show-overflow-tooltip
+                      >
+                        <template #default="{ row }">
+                          <span v-if="row[field.name] === null" class="null-value">null</span>
+                          <span v-else>{{ formatCellValue(row[field.name]) }}</span>
+                        </template>
+                      </el-table-column>
+                    </el-table>
+
+                    <div v-if="loadingPage" class="loading-overlay">
+                      <el-skeleton :rows="5" animated />
+                    </div>
+                    <div v-else>
+                      <el-pagination
+                        v-model:current-page="currentPage"
+                        v-model:page-size="pageSize"
+                        :page-sizes="paginationMode === 'client' ? [10, 20, 50, 100] : [10, 20, 50, 100, 200, 500]"
+                        :total="displayTotalCount"
+                        :disabled="loadingPage"
+                        layout="total, sizes, prev, pager, next, jumper"
+                        class="pagination"
+                        @size-change="onPageSizeChange"
+                        @current-change="onPageChange"
+                      />
+                    </div>
+                  </div>
+
+                  <el-empty
+                    v-else-if="paginationMode === 'server'"
+                    description="点击「开始预览」按钮进入后端分页模式"
+                  />
+                  <el-empty v-else description="点击「生成数据」按钮生成数据" />
+                </el-card>
+              </div>
+            </el-tab-pane>
+
+            <el-tab-pane label="API 文档" name="api">
+              <el-card class="api-card">
+                <template #header>
+                  <div class="card-header">
+                    <span class="card-title">
+                      <el-icon><Document /></el-icon>
+                      API 接口文档
+                    </span>
+                  </div>
+                </template>
+
+                <div class="api-section">
+                  <h3>POST /api/generate</h3>
+                  <p>生成指定数量的 mock 数据</p>
+                  <el-input type="textarea" :rows="8" readonly class="code-block"
+                    :value="generateApiExample"
+                  />
+                </div>
+
+                <el-divider />
+
+                <div class="api-section">
+                  <h3>POST /api/generate/page</h3>
+                  <p>分页生成 mock 数据</p>
+                  <el-input type="textarea" :rows="10" readonly class="code-block"
+                    :value="pageApiExample"
+                  />
+                </div>
+
+                <el-divider />
+
+                <div class="api-section">
+                  <h3>POST /api/export/json</h3>
+                  <p>导出 JSON 格式文件</p>
+                </div>
+
+                <div class="api-section">
+                  <h3>POST /api/export/csv</h3>
+                  <p>导出 CSV 格式文件</p>
+                </div>
+
+                <el-divider />
+
+                <div class="api-section">
+                  <h3>当前模型 JSON</h3>
+                  <p>可以直接复制使用</p>
+                  <el-input type="textarea" :rows="12" readonly class="code-block"
+                    :value="JSON.stringify({ model: modelForm, count: 100, seed }, null, 2)"
+                  />
+                </div>
+              </el-card>
+            </el-tab-pane>
+          </el-tabs>
+        </el-main>
+      </el-container>
+    </el-container>
+  </div>
+
+  <script src="https://unpkg.com/vue@3.4.0/dist/vue.global.js"></script>
+  <script src="https://unpkg.com/element-plus@2.4.4/dist/index.full.js"></script>
+  <script src="https://unpkg.com/@element-plus/icons-vue@2.3.1/dist/index.iife.min.js"></script>
+  <script src="/app.js"></script>
+</body>
+</html>

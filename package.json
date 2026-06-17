@@ -1,0 +1,18 @@
+{
+  "name": "mock-data-generator",
+  "version": "1.0.0",
+  "description": "本地Mock数据生成服务 - 用于开发团队",
+  "main": "server/index.js",
+  "scripts": {
+    "start": "node server/index.js",
+    "dev": "node server/index.js"
+  },
+  "keywords": ["mock", "data", "generator"],
+  "author": "Dev Team",
+  "license": "MIT",
+  "dependencies": {
+    "express": "^4.18.2",
+    "cors": "^2.8.5",
+    "seedrandom": "^3.0.5"
+  }
+}
