@@ -25,6 +25,10 @@ const app = createApp({
     const formats = ref([]);
     const templates = ref([]);
 
+    const qualityChecking = ref(false);
+    const qualityCheckCount = ref(100);
+    const qualityReport = ref(null);
+
     const modelForm = reactive({
       name: '用户',
       fields: []
@@ -108,6 +112,48 @@ Content-Type: application/json
     "skip": 0,
     "limit": 20,
     "seed": ${seed.value}
+  }
+}`;
+    });
+
+    const qualityCheckApiExample = computed(() => {
+      return `// 请求 - 数据质量检查
+POST /api/quality/check
+Content-Type: application/json
+
+{
+  "model": {
+    "name": "${modelForm.name}",
+    "fields": [...]
+  },
+  "count": 100,
+  "seed": ${seed.value},
+  "options": {
+    "sampleSize": 5,
+    "maxErrors": 100
+  }
+}
+
+// 响应
+{
+  "success": true,
+  "data": {
+    "report": {
+      "summary": {
+        "totalRecords": 100,
+        "passedRecords": 95,
+        "failedRecords": 5,
+        "overallPassRate": "95.00",
+        "qualityLevel": {
+          "level": "good",
+          "label": "良好",
+          "color": "#E6A23C"
+        }
+      },
+      "fields": [...],
+      "suggestions": [...]
+    },
+    "data": [...]
   }
 }`;
     });
@@ -494,6 +540,157 @@ Content-Type: application/json
       }
     };
 
+    const getProgressColor = (passRate) => {
+      const rate = parseFloat(passRate);
+      if (rate >= 99) return '#67C23A';
+      if (rate >= 95) return '#E6A23C';
+      if (rate >= 80) return '#F56C6C';
+      return '#F56C6C';
+    };
+
+    const getQualityTagType = (level) => {
+      const typeMap = {
+        excellent: 'success',
+        good: 'warning',
+        fair: 'danger',
+        poor: 'danger'
+      };
+      return typeMap[level] || 'info';
+    };
+
+    const formatSampleValue = (value) => {
+      if (value === null || value === undefined) return 'null';
+      if (typeof value === 'string' && value.length > 50) {
+        return value.substring(0, 50) + '...';
+      }
+      return String(value);
+    };
+
+    const showFieldErrors = (field) => {
+      const errorList = field.errors.slice(0, 20).map(err =>
+        `第 ${err.rowIndex} 行: ${err.error} (值: ${formatSampleValue(err.value)})`
+      ).join('\n');
+
+      ElMessageBox.alert(
+        errorList || '暂无错误详情',
+        `${field.label} - 错误详情`,
+        {
+          confirmButtonText: '确定',
+          type: 'error',
+          dangerouslyUseHTMLString: false
+        }
+      );
+    };
+
+    const runQualityCheck = async () => {
+      if (modelForm.fields.length === 0) {
+        ElMessage.warning('请至少添加一个字段');
+        return;
+      }
+
+      qualityChecking.value = true;
+      try {
+        const startTime = Date.now();
+        const response = await fetch('/api/quality/check', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({
+            model: modelForm,
+            count: qualityCheckCount.value,
+            seed: seed.value,
+            options: {
+              sampleSize: 5,
+              maxErrors: 100
+            }
+          })
+        });
+
+        const result = await response.json();
+
+        if (result.success) {
+          qualityReport.value = result.data.report;
+          seed.value = result.data.seed || seed.value;
+          if (result.data.data && result.data.data.length > 0) {
+            generatedData.value = result.data.data;
+            actualGeneratedCount.value = result.data.data.length;
+            currentPage.value = 1;
+            updateCurrentPageData();
+          }
+
+          const duration = ((Date.now() - startTime) / 1000).toFixed(2);
+          const level = qualityReport.value.summary.qualityLevel;
+          ElMessage.success(
+            `质量检查完成，共 ${qualityReport.value.summary.totalRecords} 条数据，` +
+            `合格率 ${qualityReport.value.summary.overallPassRate}%，` +
+            `评级：${level.label}，耗时 ${duration}s`
+          );
+        } else {
+          ElMessage.error(result.error || '检查失败');
+        }
+      } catch (error) {
+        ElMessage.error('请求失败：' + error.message);
+      } finally {
+        qualityChecking.value = false;
+      }
+    };
+
+    const checkCurrentData = async () => {
+      if (modelForm.fields.length === 0) {
+        ElMessage.warning('请至少添加一个字段');
+        return;
+      }
+
+      const dataToCheck = paginationMode.value === 'client'
+        ? generatedData.value
+        : currentPageData.value;
+
+      if (!dataToCheck || dataToCheck.length === 0) {
+        ElMessage.warning('暂无数据可检查，请先生成数据');
+        return;
+      }
+
+      qualityChecking.value = true;
+      try {
+        const startTime = Date.now();
+        const response = await fetch('/api/quality/check', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({
+            model: modelForm,
+            data: dataToCheck,
+            options: {
+              sampleSize: 5,
+              maxErrors: 100
+            }
+          })
+        });
+
+        const result = await response.json();
+
+        if (result.success) {
+          qualityReport.value = result.data.report;
+
+          const duration = ((Date.now() - startTime) / 1000).toFixed(2);
+          const level = qualityReport.value.summary.qualityLevel;
+          ElMessage.success(
+            `质量检查完成，共 ${qualityReport.value.summary.totalRecords} 条数据，` +
+            `合格率 ${qualityReport.value.summary.overallPassRate}%，` +
+            `评级：${level.label}，耗时 ${duration}s`
+          );
+        } else {
+          ElMessage.error(result.error || '检查失败');
+        }
+      } catch (error) {
+        ElMessage.error('请求失败：' + error.message);
+      } finally {
+        qualityChecking.value = false;
+      }
+    };
+
     const loadMeta = async () => {
       try {
         const [typesRes, templatesRes] = await Promise.all([
@@ -633,6 +830,10 @@ Content-Type: application/json
       displayTotalCount,
       generateApiExample,
       pageApiExample,
+      qualityCheckApiExample,
+      qualityChecking,
+      qualityCheckCount,
+      qualityReport,
       addField,
       removeField,
       selectField,
@@ -647,7 +848,13 @@ Content-Type: application/json
       onPageSizeChange,
       exportJSON,
       exportCSV,
-      applyTemplate
+      applyTemplate,
+      runQualityCheck,
+      checkCurrentData,
+      getProgressColor,
+      getQualityTagType,
+      formatSampleValue,
+      showFieldErrors
     };
   }
 });

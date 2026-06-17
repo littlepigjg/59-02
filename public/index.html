@@ -497,6 +497,16 @@
                 <el-divider />
 
                 <div class="api-section">
+                  <h3>POST /api/quality/check</h3>
+                  <p>数据质量检查，验证生成的数据是否符合预设规则</p>
+                  <el-input type="textarea" :rows="8" readonly class="code-block"
+                    :value="qualityCheckApiExample"
+                  />
+                </div>
+
+                <el-divider />
+
+                <div class="api-section">
                   <h3>当前模型 JSON</h3>
                   <p>可以直接复制使用</p>
                   <el-input type="textarea" :rows="12" readonly class="code-block"
@@ -504,6 +514,185 @@
                   />
                 </div>
               </el-card>
+            </el-tab-pane>
+
+            <el-tab-pane label="质量报告" name="quality">
+              <div class="quality-panel">
+                <el-card class="quality-card">
+                  <template #header>
+                    <div class="card-header with-actions">
+                      <span class="card-title">
+                        <el-icon><DataAnalysis /></el-icon>
+                        数据质量检查报告
+                      </span>
+                      <div class="header-actions">
+                        <el-input-number
+                          v-model="qualityCheckCount"
+                          :min="10"
+                          :max="10000"
+                          size="default"
+                          placeholder="检查数据量"
+                        />
+                        <el-button type="primary" @click="runQualityCheck" :loading="qualityChecking">
+                          <el-icon><Refresh /></el-icon>
+                          开始检查
+                        </el-button>
+                        <el-button
+                          type="success"
+                          @click="checkCurrentData"
+                          :loading="qualityChecking"
+                          :disabled="!hasDataToExport"
+                        >
+                          <el-icon><Check /></el-icon>
+                          检查当前数据
+                        </el-button>
+                      </div>
+                    </div>
+                  </template>
+
+                  <div v-if="qualityReport" class="quality-report">
+                    <div class="quality-summary">
+                      <el-row :gutter="20">
+                        <el-col :span="6">
+                          <el-statistic title="总记录数" :value="qualityReport.summary.totalRecords" />
+                        </el-col>
+                        <el-col :span="6">
+                          <el-statistic title="合格记录数" :value="qualityReport.summary.passedRecords" />
+                        </el-col>
+                        <el-col :span="6">
+                          <el-statistic title="不合格记录数" :value="qualityReport.summary.failedRecords" />
+                        </el-col>
+                        <el-col :span="6">
+                          <div class="pass-rate-card" :style="{ borderColor: qualityReport.summary.qualityLevel.color }">
+                            <div class="pass-rate-label">总体合格率</div>
+                            <div class="pass-rate-value" :style="{ color: qualityReport.summary.qualityLevel.color }">
+                              {{ qualityReport.summary.overallPassRate }}%
+                            </div>
+                            <el-tag :type="getQualityTagType(qualityReport.summary.qualityLevel.level)" size="small">
+                              {{ qualityReport.summary.qualityLevel.label }}
+                            </el-tag>
+                          </div>
+                        </el-col>
+                      </el-row>
+                      <div class="quality-meta">
+                        <el-tag size="small">检查耗时: {{ qualityReport.summary.duration }}s</el-tag>
+                        <el-tag size="small">字段总数: {{ qualityReport.summary.totalFields }}</el-tag>
+                        <el-tag size="small" type="danger" v-if="qualityReport.summary.failedFields > 0">
+                          异常字段: {{ qualityReport.summary.failedFields }}
+                        </el-tag>
+                      </div>
+                    </div>
+
+                    <el-divider v-if="qualityReport.suggestions.length > 0" />
+
+                    <div v-if="qualityReport.suggestions.length > 0" class="quality-suggestions">
+                      <h3 class="section-subtitle">
+                        <el-icon><Lightbulb /></el-icon>
+                        优化建议
+                      </h3>
+                      <el-alert
+                        v-for="(suggestion, idx) in qualityReport.suggestions"
+                        :key="idx"
+                        type="warning"
+                        :closable="false"
+                        show-icon
+                        class="suggestion-item"
+                      >
+                        <template #title>
+                          {{ suggestion }}
+                        </template>
+                      </el-alert>
+                    </div>
+
+                    <el-divider />
+
+                    <div class="quality-fields">
+                      <h3 class="section-subtitle">
+                        <el-icon><List /></el-icon>
+                        字段详细检查结果
+                      </h3>
+                      <el-table :data="qualityReport.fields" stripe border style="width: 100%;" max-height="400px">
+                        <el-table-column prop="label" label="字段" min-width="120" />
+                        <el-table-column prop="type" label="类型" width="80" />
+                        <el-table-column prop="total" label="总数" width="80" />
+                        <el-table-column prop="passed" label="合格" width="80" />
+                        <el-table-column prop="failed" label="不合格" width="80" />
+                        <el-table-column prop="nullCount" label="空值" width="80" />
+                        <el-table-column label="合格率" width="100">
+                          <template #default="{ row }">
+                            <el-progress
+                              :percentage="parseFloat(row.passRate)"
+                              :color="getProgressColor(row.passRate)"
+                              :stroke-width="12"
+                            />
+                          </template>
+                        </el-table-column>
+                        <el-table-column label="操作" width="100" align="center">
+                          <template #default="{ row }">
+                            <el-button
+                              v-if="row.failed > 0"
+                              type="danger"
+                              size="small"
+                              @click="showFieldErrors(row)"
+                            >
+                              查看错误
+                            </el-button>
+                            <el-tag v-else type="success" size="small">全部合格</el-tag>
+                          </template>
+                        </el-table-column>
+                      </el-table>
+                    </div>
+
+                    <el-divider v-if="qualityReport.failedFields.length > 0" />
+
+                    <div v-if="qualityReport.failedFields.length > 0" class="quality-failed-fields">
+                      <h3 class="section-subtitle">
+                        <el-icon><Warning /></el-icon>
+                        不合格字段详情
+                      </h3>
+                      <el-row :gutter="20">
+                        <el-col :span="12" v-for="field in qualityReport.failedFields" :key="field.field">
+                          <el-card class="failed-field-card" shadow="hover">
+                            <template #header>
+                              <div class="failed-field-header">
+                                <span class="failed-field-name">{{ field.label }}</span>
+                                <el-tag type="danger" size="small">{{ field.failed }} 条错误</el-tag>
+                              </div>
+                            </template>
+                            <div class="failed-field-stats">
+                              <div class="stat-item">
+                                <span class="stat-label">合格率</span>
+                                <el-progress
+                                  :percentage="parseFloat(field.passRate)"
+                                  :color="getProgressColor(field.passRate)"
+                                  :stroke-width="8"
+                                />
+                              </div>
+                            </div>
+                            <el-divider />
+                            <div class="failed-field-samples">
+                              <div class="samples-title">错误样例</div>
+                              <div
+                                v-for="(sample, idx) in field.samples"
+                                :key="idx"
+                                class="sample-item"
+                              >
+                                <span class="sample-row">#{{ sample.row }}</span>
+                                <span class="sample-value">{{ formatSampleValue(sample.value) }}</span>
+                                <el-tooltip :content="sample.error" placement="top">
+                                  <el-tag type="danger" size="small" effect="dark">错误</el-tag>
+                                </el-tooltip>
+                              </div>
+                            </div>
+                          </el-card>
+                        </el-col>
+                      </el-row>
+                    </div>
+                  </div>
+
+                  <el-empty v-else description="点击「开始检查」按钮进行数据质量检查" />
+                </el-card>
+              </div>
             </el-tab-pane>
           </el-tabs>
         </el-main>

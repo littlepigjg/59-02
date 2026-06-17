@@ -3,6 +3,7 @@ const router = express.Router();
 const ModelParser = require('../models/ModelParser');
 const DataGenerator = require('../generator/DataGenerator');
 const DataConverter = require('../utils/converter');
+const DataQualityChecker = require('../quality/DataQualityChecker');
 
 const modelParser = new ModelParser();
 
@@ -240,6 +241,44 @@ router.get('/templates', (req, res) => {
       }
     ]
   });
+});
+
+router.post('/quality/check', (req, res) => {
+  try {
+    const { model, data, count = 100, seed, options } = req.body;
+
+    if (!data || !Array.isArray(data) || data.length === 0) {
+      const parsedModel = modelParser.parse(model);
+      const generator = new DataGenerator(seed);
+      const generatedData = generator.generate(parsedModel, count);
+      const checker = new DataQualityChecker();
+      const report = checker.check(generatedData, parsedModel, options);
+
+      res.json({
+        success: true,
+        data: {
+          report,
+          data: generatedData
+        }
+      });
+    } else {
+      const parsedModel = modelParser.parse(model);
+      const checker = new DataQualityChecker();
+      const report = checker.check(data, parsedModel, options);
+
+      res.json({
+        success: true,
+        data: {
+          report
+        }
+      });
+    }
+  } catch (error) {
+    res.status(400).json({
+      success: false,
+      error: error.message
+    });
+  }
 });
 
 module.exports = router;
